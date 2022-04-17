@@ -19,7 +19,7 @@ import (
 type Token struct {
 	bun.BaseModel `bun:"table:tokens"`
 	ID uuid.UUID `bun:",pk,type:uuid"`
-	Value string
+	Value string // has idx
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -28,6 +28,30 @@ func initTokenTable(db *bun.DB) {
 	ctx := context.Background()
 	db.NewCreateTable().IfNotExists().Model((*Token)(nil)).Exec(ctx)
 }
+
+var _ bun.BeforeAppendModelHook = (*Token)(nil)
+func (t *Token) BeforeAppendModel(ctx context.Context, query bun.Query) error {
+	switch query.(type) {
+		case *bun.InsertQuery:
+			t.CreatedAt = time.Now()
+			t.UpdatedAt = time.Now()
+		case *bun.UpdateQuery:
+			t.UpdatedAt = time.Now()
+	}
+	return nil
+}
+
+var _ bun.AfterCreateTableHook = (*Token)(nil)
+func (*Token) AfterCreateTable(ctx context.Context, query *bun.CreateTableQuery) error {
+	_, err := query.DB().NewCreateIndex().
+		Model((*Token)(nil)).
+		Index("value_idx").
+		IfNotExists().
+		Column("value").
+		Exec(ctx)
+	return err
+}
+
 
 func initAuthRoutes(app *fiber.App, db *bun.DB) {
 	routes := app.Group("/api/v1/auth")
@@ -95,11 +119,11 @@ func login(c * fiber.Ctx, db *bun.DB) error {
 	}
 
 	found := new(User)
-	db.NewSelect().Model(found).Where("email = ?", user.Email).Scan(ctx)
+	db.NewSelect().Model(found).Where("username = ?", user.Username).Scan(ctx)
 
 	match := checkPasswordHash(user.Password, found.Password)
 	if !match || found.Password == "" {
-		return errors.New("invalid email or password")
+		return errors.New("invalid username or password")
 	}
 
 	token := createJwt(found.ID.String(), db)

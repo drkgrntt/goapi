@@ -16,9 +16,10 @@ type User struct {
 	bun.BaseModel `bun:"table:users"`
 	ID uuid.UUID `bun:",pk,type:uuid"`
 	Token string `bun:"-"`
-	Email string `bun:",pk"`
+	Username string // has idx
 	Password string
 	Role string
+	Metadata map[string]interface{} `bun:"type:jsonb"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -27,8 +28,9 @@ type User struct {
 type PublicUser struct {
 	ID uuid.UUID
 	Token string
-	Email string
+	Username string
 	Role string
+	Metadata map[string]interface{}
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -36,6 +38,29 @@ type PublicUser struct {
 func initUserTable(db *bun.DB) {
 	ctx := context.Background()
 	db.NewCreateTable().IfNotExists().Model((*User)(nil)).Exec(ctx)
+}
+
+var _ bun.BeforeAppendModelHook = (*User)(nil)
+func (u *User) BeforeAppendModel(ctx context.Context, query bun.Query) error {
+	switch query.(type) {
+		case *bun.InsertQuery:
+			u.CreatedAt = time.Now()
+			u.UpdatedAt = time.Now()
+		case *bun.UpdateQuery:
+			u.UpdatedAt = time.Now()
+	}
+	return nil
+}
+
+var _ bun.AfterCreateTableHook = (*User)(nil)
+func (*User) AfterCreateTable(ctx context.Context, query *bun.CreateTableQuery) error {
+	_, err := query.DB().NewCreateIndex().
+		Model((*User)(nil)).
+		Index("username_idx").
+		IfNotExists().
+		Column("username").
+		Exec(ctx)
+	return err
 }
 
 func initUserRoutes(app *fiber.App, db *bun.DB) {
@@ -90,14 +115,14 @@ func postHandler(c *fiber.Ctx, db *bun.DB) error {
 func (user *User) New(db *bun.DB) (sql.Result, error) {
 	ctx := context.Background()
 
-	if user.Email == "" || user.Password == "" {
-		return nil, errors.New("no email or password")
+	if user.Username == "" || user.Password == "" {
+		return nil, errors.New("no username or password")
 	}
 
 	found := new(User)
-	db.NewSelect().Model(found).Where("email = ?", user.Email).Scan(ctx)
-	if found.Email == user.Email {
-		return nil, errors.New("email in use")
+	db.NewSelect().Model(found).Where("username = ?", user.Username).Scan(ctx)
+	if found.Username == user.Username {
+		return nil, errors.New("username in use")
 	}
 
 	user.ID = uuid.New()
@@ -110,7 +135,7 @@ func (user *User) ToPublicUser() *PublicUser {
 	publicUser := new(PublicUser)
 
 	publicUser.ID = user.ID
-	publicUser.Email = user.Email
+	publicUser.Username = user.Username
 	publicUser.Role = user.Role
 	publicUser.Token = user.Token
 	publicUser.CreatedAt = user.CreatedAt
