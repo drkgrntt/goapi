@@ -74,8 +74,7 @@ func initAuthRoutes(app *fiber.App, db *bun.DB) {
 }
 
 func getCurrentUser(c *fiber.Ctx, db *bun.DB) error {
-	headers := c.GetReqHeaders()
-	tokenString := headers["X-Token"]
+	tokenString := getTokenStringFromHeaders(c)
 
 	if tokenString == "" {
 		return c.JSON(nil)
@@ -132,8 +131,8 @@ func login(c * fiber.Ctx, db *bun.DB) error {
 	return c.JSON(found.ToPublicUser())
 }
 
-func logout(c * fiber.Ctx, db *bun.DB) error {
-	token := c.GetReqHeaders()["X-Token"]
+func logout(c *fiber.Ctx, db *bun.DB) error {
+	token := getTokenStringFromHeaders(c)
 	if token != "" {
 		// Go through the token verification process
 		// so that we can do nothing if invalid
@@ -223,8 +222,7 @@ func getUserFromJwt(tokenString string, db *bun.DB) (*User, error) {
 }
 
 func requireAdmin(c * fiber.Ctx, db *bun.DB) error {
-	headers := c.GetReqHeaders()
-	tokenString := headers["X-Token"]
+	tokenString := getTokenStringFromHeaders(c)
 	if tokenString == "" {
 		return errors.New("no token provided")
 	}
@@ -249,4 +247,19 @@ func hashPassword(password string) (string, error) {
 func checkPasswordHash(password, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
+}
+
+func getTokenStringFromHeaders(c *fiber.Ctx) string {
+	headers := c.GetReqHeaders()
+	bearerToken := headers["Authorization"]
+	if bearerToken == "" {
+		return ""
+	}
+
+	pieces := strings.Split(bearerToken, " ")
+	if strings.ToLower(pieces[0]) != "bearer" {
+		return ""
+	}
+
+	return pieces[1]
 }
