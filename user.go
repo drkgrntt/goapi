@@ -138,6 +138,7 @@ func (user *User) ToPublicUser() *PublicUser {
 	publicUser.Username = user.Username
 	publicUser.Role = user.Role
 	publicUser.Token = user.Token
+	publicUser.Metadata = user.Metadata
 	publicUser.CreatedAt = user.CreatedAt
 	publicUser.UpdatedAt = user.UpdatedAt
 

@@ -22,9 +22,6 @@ func main() {
 	initAuthRoutes(app, db)
 
 	port := os.Getenv("PORT")
-	if port == "" {
-		port = "4444"
-	}
 	
 	log.Fatalln(app.Listen(fmt.Sprintf(":%v", port)))
 }
