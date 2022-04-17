@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -78,25 +79,29 @@ func (*User) AfterCreateTable(ctx context.Context, query *bun.CreateTableQuery) 
 }
 
 func initUserRoutes(app *fiber.App, db *bun.DB) {
+	app.Patch("/api/v1/users", func(c *fiber.Ctx) error {
+		return updateUserMetadata(c, db)
+	})
+
 	routes := app.Group("/api/v1/users", func(c *fiber.Ctx) error {
 		return requireAdmin(c, db)
 	})
 
 	routes.Get("/", func(c *fiber.Ctx) error {
-		return getHandler(c, db)
+		return getUsers(c, db)
 	})
 	routes.Post("/", func(c *fiber.Ctx) error {
-		return postHandler(c, db)
+		return createUser(c, db)
 	})
 	routes.Put("/:id", func(c *fiber.Ctx) error {
-		return putHandler(c, db)
+		return updateUser(c, db)
 	})
 	routes.Delete("/:id", func(c *fiber.Ctx) error {
-		return deleteHandler(c, db)
+		return deleteUser(c, db)
 	})
 }
 
-func getHandler(c *fiber.Ctx, db *bun.DB) error {
+func getUsers(c *fiber.Ctx, db *bun.DB) error {
 	ctx := context.Background()
 	users := []User{}
 	err := db.NewSelect().Model(&users).Scan(ctx)
@@ -112,7 +117,7 @@ func getHandler(c *fiber.Ctx, db *bun.DB) error {
 	return c.JSON(publicUsers)
 }
 
-func postHandler(c *fiber.Ctx, db *bun.DB) error {
+func createUser(c *fiber.Ctx, db *bun.DB) error {
 	user := new(User)
 	
 	if err := c.BodyParser(user); err != nil {
@@ -159,7 +164,7 @@ func (user *User) ToPublicUser() *PublicUser {
 	return publicUser
 }
 
-func putHandler(c *fiber.Ctx, db *bun.DB) error {
+func updateUser(c *fiber.Ctx, db *bun.DB) error {
 	ctx := context.Background()
 	user := new(User)
 	
@@ -180,7 +185,38 @@ func putHandler(c *fiber.Ctx, db *bun.DB) error {
 	return c.JSON(user.ToPublicUser())
 }
 
-func deleteHandler(c *fiber.Ctx, db *bun.DB) error {
+func updateUserMetadata(c *fiber.Ctx, db *bun.DB) error {
+	ctx := context.Background()
+	tokenString := getTokenStringFromHeaders(c)
+
+	if tokenString == "" {
+		return errors.New("unauthorized")
+	}
+
+	currentUser, err := getUserFromJwt(tokenString, db)
+	if err != nil {
+		fmt.Println(err)
+		return errors.New("unauthorized")
+	}
+
+	body := new(User)
+	if err := c.BodyParser(body); err != nil {
+		return err
+	}
+
+	// ONLY update metadata here
+	currentUser.Metadata = body.Metadata
+
+	_, err = db.NewUpdate().Model(currentUser).Where("id = ?", currentUser.ID).Exec(ctx)
+	if err != nil {
+		fmt.Println(err)
+		return errors.New("something went wrong")
+	}
+
+	return c.JSON(currentUser.ToPublicUser())
+}
+
+func deleteUser(c *fiber.Ctx, db *bun.DB) error {
 	ctx := context.Background()
 
 	id := c.Params("id")
