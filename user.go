@@ -14,14 +14,19 @@ import (
 // User DB model
 type User struct {
 	bun.BaseModel `bun:"table:users"`
-	ID uuid.UUID `bun:",pk,type:uuid"`
+	ID uuid.UUID `bun:",pk,type:uuid,default:gen_random_uuid()"`
 	Token string `bun:"-"`
 	Username string // has idx
 	Password string
 	Role string
 	Metadata map[string]interface{} `bun:"type:jsonb"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	CreatedAt time.Time `bun:",nullzero,notnull,default:current_timestamp"`
+	UpdatedAt time.Time `bun:",nullzero,notnull,default:current_timestamp"`
+
+	// Relationships
+	AccountId uuid.UUID `bun:",type:uuid"`
+	Account *Account `bun:"rel:belongs-to,join:account_id=id"`
+	Tokens []*Token `bun:"rel:has-many,join:id=user_id"`
 }
 
 // Client-facing User model
@@ -43,9 +48,6 @@ func initUserTable(db *bun.DB) {
 var _ bun.BeforeAppendModelHook = (*User)(nil)
 func (u *User) BeforeAppendModel(ctx context.Context, query bun.Query) error {
 	switch query.(type) {
-		case *bun.InsertQuery:
-			u.CreatedAt = time.Now()
-			u.UpdatedAt = time.Now()
 		case *bun.UpdateQuery:
 			u.UpdatedAt = time.Now()
 	}
@@ -60,6 +62,18 @@ func (*User) AfterCreateTable(ctx context.Context, query *bun.CreateTableQuery) 
 		IfNotExists().
 		Column("username").
 		Exec(ctx)
+
+	if err != nil {
+		return err
+	}
+
+	_, err = query.DB().NewCreateIndex().
+		Model((*User)(nil)).
+		Index("account_id_idx").
+		IfNotExists().
+		Column("account_id").
+		Exec(ctx)
+
 	return err
 }
 
@@ -120,7 +134,7 @@ func (user *User) New(db *bun.DB) (sql.Result, error) {
 	}
 
 	found := new(User)
-	db.NewSelect().Model(found).Where("username = ?", user.Username).Scan(ctx)
+	db.NewSelect().Model(found).Where("username = ?", user.Username).Where("account_id = ?", user.AccountId).Scan(ctx)
 	if found.Username == user.Username {
 		return nil, errors.New("username in use")
 	}

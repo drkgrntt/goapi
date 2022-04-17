@@ -24,6 +24,7 @@ func initDb() (*bun.DB) {
 func initTables(db *bun.DB) {
 	initUserTable(db)
 	initTokenTable(db)
+	initAccountTable(db)
 }
 
 func initHooks(db *bun.DB) {

@@ -18,10 +18,14 @@ import (
 // Token DB model
 type Token struct {
 	bun.BaseModel `bun:"table:tokens"`
-	ID uuid.UUID `bun:",pk,type:uuid"`
+	ID uuid.UUID `bun:",pk,type:uuid,default:gen_random_uuid()"`
 	Value string // has idx
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	CreatedAt time.Time `bun:",nullzero,notnull,default:current_timestamp"`
+	UpdatedAt time.Time `bun:",nullzero,notnull,default:current_timestamp"`
+	
+	// Relations
+	UserId uuid.UUID `bun:",type:uuid"`
+	User *User `bun:"rel:belongs-to,join:user_id=id"`
 }
 
 func initTokenTable(db *bun.DB) {
@@ -32,9 +36,6 @@ func initTokenTable(db *bun.DB) {
 var _ bun.BeforeAppendModelHook = (*Token)(nil)
 func (t *Token) BeforeAppendModel(ctx context.Context, query bun.Query) error {
 	switch query.(type) {
-		case *bun.InsertQuery:
-			t.CreatedAt = time.Now()
-			t.UpdatedAt = time.Now()
 		case *bun.UpdateQuery:
 			t.UpdatedAt = time.Now()
 	}
@@ -52,24 +53,23 @@ func (*Token) AfterCreateTable(ctx context.Context, query *bun.CreateTableQuery)
 	return err
 }
 
-
 func initAuthRoutes(app *fiber.App, db *bun.DB) {
 	routes := app.Group("/api/v1/auth")
-
 	routes.Get("/", func(c *fiber.Ctx) error {
 		return getCurrentUser(c, db)
 	})
+	routes.Delete("/", func(c *fiber.Ctx) error {
+		return logout(c, db)
+	})
 
+	routes = routes.Group("/", func(c *fiber.Ctx) error {
+		return requireAccount(c, db)
+	})
 	routes.Post("/", func(c *fiber.Ctx) error {
 		return register(c, db)
 	})
-
 	routes.Put("/", func(c *fiber.Ctx) error {
 		return login(c, db)
-	})
-
-	routes.Delete("/", func(c *fiber.Ctx) error {
-		return logout(c, db)
 	})
 }
 
@@ -86,6 +86,8 @@ func getCurrentUser(c *fiber.Ctx, db *bun.DB) error {
 		return c.JSON(nil)
 	}
 
+	user.Token = tokenString
+
 	return c.JSON(user.ToPublicUser())
 }
 
@@ -96,14 +98,20 @@ func register(c *fiber.Ctx, db *bun.DB) error {
 		return err
 	}
 
+	accountId, err := getAccountIdFromHeaders(c)
+	if err != nil {
+		return err
+	}
+
+	user.AccountId = accountId
 	user.Role = ""
-	_, err := user.New(db)
+	_, err = user.New(db)
 
 	if err != nil {
 		return err
 	}
 
-	token := createJwt(user.ID.String(), db)
+	token := createJwt(user.ID, accountId, db)
 	user.Token = token
 	
 	return c.JSON(user.ToPublicUser())
@@ -117,15 +125,20 @@ func login(c * fiber.Ctx, db *bun.DB) error {
 		return err
 	}
 
+	accountId, err := getAccountIdFromHeaders(c)
+	if err != nil {
+		return err
+	}
+
 	found := new(User)
-	db.NewSelect().Model(found).Where("username = ?", user.Username).Scan(ctx)
+	db.NewSelect().Model(found).Where("username = ?", user.Username).Where("account_id = ?", accountId).Scan(ctx)
 
 	match := checkPasswordHash(user.Password, found.Password)
 	if !match || found.Password == "" {
 		return errors.New("invalid username or password")
 	}
 
-	token := createJwt(found.ID.String(), db)
+	token := createJwt(found.ID, accountId, db)
 	found.Token = token
 
 	return c.JSON(found.ToPublicUser())
@@ -153,9 +166,10 @@ func logout(c *fiber.Ctx, db *bun.DB) error {
 	return c.JSON(fiber.Map{"success": true})
 }
 
-func createJwt(id string, db *bun.DB) string {
+func createJwt(userId uuid.UUID, accountId uuid.UUID, db *bun.DB) string {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"id": id,
+		"uid": userId,
+		"aid": accountId,
 		"iss": time.Now().Unix(),
 		"exp": time.Now().Add(time.Hour*24*14).Unix(),
 	})
@@ -173,6 +187,7 @@ func createJwt(id string, db *bun.DB) string {
 	tokenRecord := new(Token)
 	tokenRecord.Value = unsignToken(tokenString)
 	tokenRecord.ID = uuid.New()
+	tokenRecord.UserId = userId
 
 	db.NewInsert().Model(tokenRecord).Exec(ctx)
 
@@ -210,7 +225,7 @@ func getUserFromJwt(tokenString string, db *bun.DB) (*User, error) {
 	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
 		
 		user := new(User)
-		err := db.NewSelect().Model(user).Where("id = ?", claims["id"]).Scan(ctx)
+		err := db.NewSelect().Model(user).Where("id = ?", claims["uid"]).Where("account_id = ?", claims["aid"]).Scan(ctx)
 		if err != nil {
 			return nil, err
 		}
