@@ -24,7 +24,7 @@ type User struct {
 	UpdatedAt time.Time `bun:",nullzero,notnull,default:current_timestamp"`
 
 	// Relationships
-	AccountId uuid.UUID `bun:",type:uuid"`
+	AccountId uuid.UUID `bun:",type:uuid"` // has idx
 	Account *Account `bun:"rel:belongs-to,join:account_id=id"`
 	Tokens []*Token `bun:"rel:has-many,join:id=user_id"`
 }
