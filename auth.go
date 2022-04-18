@@ -86,8 +86,6 @@ func getCurrentUser(c *fiber.Ctx, db *bun.DB) error {
 		return c.JSON(nil)
 	}
 
-	user.Token = tokenString
-
 	return c.JSON(user.ToPublicUser())
 }
 
@@ -98,12 +96,19 @@ func register(c *fiber.Ctx, db *bun.DB) error {
 		return err
 	}
 
-	accountId, err := getAccountIdFromHeaders(c)
+	accountKey, err := getAccountKeyFromHeaders(c)
 	if err != nil {
 		return err
 	}
 
-	user.AccountId = accountId
+	key := new(Key)
+	ctx := context.Background()
+	err = db.NewSelect().Model(key).Where("id = ?", accountKey).Scan(ctx)
+	if err != nil {
+		return err
+	}
+
+	user.AccountId = key.AccountId
 	user.Role = ""
 	_, err = user.New(db)
 
@@ -111,7 +116,7 @@ func register(c *fiber.Ctx, db *bun.DB) error {
 		return err
 	}
 
-	token := createJwt(user.ID, accountId, db)
+	token := createJwt(user.ID, user.AccountId, db)
 	user.Token = token
 	
 	return c.JSON(user.ToPublicUser())
@@ -125,20 +130,26 @@ func login(c * fiber.Ctx, db *bun.DB) error {
 		return err
 	}
 
-	accountId, err := getAccountIdFromHeaders(c)
+	accountKey, err := getAccountKeyFromHeaders(c)
+	if err != nil {
+		return err
+	}
+
+	key := new(Key)
+	err = db.NewSelect().Model(key).Where("id = ?", accountKey).Scan(ctx)
 	if err != nil {
 		return err
 	}
 
 	found := new(User)
-	db.NewSelect().Model(found).Where("username = ?", user.Username).Where("account_id = ?", accountId).Scan(ctx)
+	db.NewSelect().Model(found).Where("username = ?", user.Username).Where("account_id = ?", key.AccountId).Scan(ctx)
 
 	match := checkPasswordHash(user.Password, found.Password)
 	if !match || found.Password == "" {
 		return errors.New("invalid username or password")
 	}
 
-	token := createJwt(found.ID, accountId, db)
+	token := createJwt(found.ID, found.AccountId, db)
 	found.Token = token
 
 	return c.JSON(found.ToPublicUser())
@@ -230,6 +241,7 @@ func getUserFromJwt(tokenString string, db *bun.DB) (*User, error) {
 			return nil, err
 		}
 
+		user.Token = tokenString
 		return user, nil
 	}
 

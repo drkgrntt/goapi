@@ -20,15 +20,35 @@ type Account struct {
 
 	// Relations
 	Users []*User `bun:"rel:has-many,join:id=account_id"`
+	Keys []*Key `bun:"rel:has-many,join:id=account_id"`
 }
 
-func initAccountTable(db *bun.DB) {
+// Key DB model
+type Key struct {
+	bun.BaseModel `bun:"table:keys"`
+	ID uuid.UUID `bun:",pk,type:uuid,default:gen_random_uuid()"`
+	CreatedAt time.Time `bun:",nullzero,notnull,default:current_timestamp"`
+	UpdatedAt time.Time `bun:",nullzero,notnull,default:current_timestamp"`
+
+	// Relations
+	AccountId uuid.UUID `bun:",type:uuid"`
+	Account *Account `bun:"rel:belongs-to,join:account_id=id"`
+}
+
+func initAccountTables(db *bun.DB) {
 	ctx := context.Background()
 	db.NewCreateTable().IfNotExists().Model((*Account)(nil)).Exec(ctx)
+	db.NewCreateTable().IfNotExists().Model((*Key)(nil)).Exec(ctx)
 }
 
-var _ bun.BeforeAppendModelHook = (*Account)(nil)
 func (a *Account) BeforeAppendModel(ctx context.Context, query bun.Query) error {
+	switch query.(type) {
+		case *bun.UpdateQuery:
+			a.UpdatedAt = time.Now()
+	}
+	return nil
+}
+func (a *Key) BeforeAppendModel(ctx context.Context, query bun.Query) error {
 	switch query.(type) {
 		case *bun.UpdateQuery:
 			a.UpdatedAt = time.Now()
@@ -37,25 +57,25 @@ func (a *Account) BeforeAppendModel(ctx context.Context, query bun.Query) error 
 }
 
 func requireAccount(c *fiber.Ctx, db *bun.DB) error {
-	accountId, err := getAccountIdFromHeaders(c)
+	accountKey, err := getAccountKeyFromHeaders(c)
 	if err != nil {
 		fmt.Println(err)
-		return errors.New("no account id provided")
+		return errors.New("no account key provided")
 	}
 
-	account := new(Account)
+	key := new(Key)
 	ctx := context.Background()
-	err = db.NewSelect().Model(account).Where("id = ?", accountId).Scan(ctx)
+	err = db.NewSelect().Model(key).Where("id = ?", accountKey).Scan(ctx)
 
 	if err != nil {
 		fmt.Println(err)
-		return errors.New("invalid account id")
+		return errors.New("invalid account key")
 	}
 
 	return c.Next()
 }
 
-func getAccountIdFromHeaders(c *fiber.Ctx) (uuid.UUID, error) {
+func getAccountKeyFromHeaders(c *fiber.Ctx) (uuid.UUID, error) {
 	headers := c.GetReqHeaders()
-	return uuid.Parse(headers["Account-Id"])
+	return uuid.Parse(headers["Account-Key"])
 }
