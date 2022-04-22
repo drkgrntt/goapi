@@ -64,6 +64,10 @@ func initAuthRoutes(app *fiber.App, db *bun.DB) {
 		return getCurrentUser(c, db)
 	})
 
+	routes.Patch("/", func(c *fiber.Ctx) error {
+		return updatePassword(c, db)
+	})
+
 	routes.Delete("/", func(c *fiber.Ctx) error {
 		return logout(c, db)
 	})
@@ -99,6 +103,63 @@ func getCurrentUser(c *fiber.Ctx, db *bun.DB) error {
 	}
 
 	return c.JSON(user.ToPublicUser())
+}
+
+func updatePassword(c *fiber.Ctx, db *bun.DB) error {
+	tokenString := getTokenStringFromHeaders(c)
+
+	if tokenString == "" {
+		return c.Status(401).JSON(fiber.Map{"message": "user not found"})
+	}
+
+	currentUser, err := getUserFromJwt(tokenString, db)
+	if err != nil {
+		fmt.Println(err)
+		return c.Status(401).JSON(fiber.Map{"message": "user not found"})
+	}
+
+	userInput := new(User)
+	if err := c.BodyParser(userInput); err != nil || userInput.NewPassword == "" {
+		fmt.Println(err)
+		return c.Status(400).JSON(fiber.Map{"message": "invalid input"})
+	}
+
+	match := checkPasswordHash(userInput.Password, currentUser.Password)
+	if !match {
+		return c.Status(400).JSON(fiber.Map{"message": "invalid old password"})
+	}
+
+	currentUser.Password, _ = hashPassword(userInput.NewPassword)
+	ctx := context.Background()
+	_, err = db.NewUpdate().Model(currentUser).Where("id = ?", currentUser.ID).Exec(ctx)
+	if err != nil {
+		fmt.Println(err)
+		return c.Status(401).JSON(fiber.Map{"message": "something went wrong"})
+	}
+
+	return c.JSON(fiber.Map{"success": true})
+}
+
+func logout(c *fiber.Ctx, db *bun.DB) error {
+	token := getTokenStringFromHeaders(c)
+	if token != "" {
+		// Go through the token verification process
+		// so that we can do nothing if invalid
+		_, err := getUserFromJwt(token, db)
+		if err == nil {
+			// At this point, we're clear to delete the token
+			ctx := context.Background()
+			_, err := db.NewDelete().Model(new(Token)).Where("value = ?", unsignToken(token)).Exec(ctx)
+			if err != nil {
+				fmt.Println(err)
+			}
+		} else {
+			fmt.Println(err)
+		}
+	}
+
+	// So as not to enumerate, always return success
+	return c.JSON(fiber.Map{"success": true})
 }
 
 func register(c *fiber.Ctx, db *bun.DB) error {
@@ -183,28 +244,6 @@ func login(c * fiber.Ctx, db *bun.DB) error {
 	found.Token = token
 
 	return c.JSON(found.ToPublicUser())
-}
-
-func logout(c *fiber.Ctx, db *bun.DB) error {
-	token := getTokenStringFromHeaders(c)
-	if token != "" {
-		// Go through the token verification process
-		// so that we can do nothing if invalid
-		_, err := getUserFromJwt(token, db)
-		if err == nil {
-			// At this point, we're clear to delete the token
-			ctx := context.Background()
-			_, err := db.NewDelete().Model(new(Token)).Where("value = ?", unsignToken(token)).Exec(ctx)
-			if err != nil {
-				fmt.Println(err)
-			}
-		} else {
-			fmt.Println(err)
-		}
-	}
-
-	// So as not to enumerate, always return success
-	return c.JSON(fiber.Map{"success": true})
 }
 
 // ====================

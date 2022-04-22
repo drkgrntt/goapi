@@ -16,7 +16,6 @@ import (
 type User struct {
 	bun.BaseModel `bun:"table:users"`
 	ID uuid.UUID `bun:",pk,type:uuid,default:gen_random_uuid()"`
-	Token string `bun:"-"`
 	Username string // has idx
 	Password string
 	Role string
@@ -28,6 +27,10 @@ type User struct {
 	AccountId uuid.UUID `bun:",type:uuid"` // has idx
 	Account *Account `bun:"rel:belongs-to,join:account_id=id"`
 	Tokens []*Token `bun:"rel:has-many,join:id=user_id"`
+
+	// Other
+	Token string `bun:"-"`
+	NewPassword string `bun:"-"`
 }
 
 // Client-facing User model
@@ -99,6 +102,10 @@ func initUserRoutes(app *fiber.App, db *bun.DB) {
 		return createUser(c, db)
 	})
 
+	routes.Get("/:id", func(c *fiber.Ctx) error {
+		return getUser(c, db)
+	})
+
 	routes.Put("/:id", func(c *fiber.Ctx) error {
 		return updateUser(c, db)
 	})
@@ -140,6 +147,20 @@ func createUser(c *fiber.Ctx, db *bun.DB) error {
 	if _, err := user.New(db); err != nil {
 		fmt.Println(err)
 		return c.Status(400).JSON(fiber.Map{"message": "something went wrong"})
+	}
+
+	return c.JSON(user.ToPublicUser())
+}
+
+func getUser(c *fiber.Ctx, db *bun.DB) error {
+	ctx := context.Background()
+	user := new(User)
+	id := c.Params("id")
+
+	err := db.NewSelect().Model(user).Where("id = ?", id).Scan(ctx)
+	if err != nil {
+		fmt.Println(err)
+		return c.JSON(nil)
 	}
 
 	return c.JSON(user.ToPublicUser())
