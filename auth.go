@@ -28,6 +28,10 @@ type Token struct {
 	User *User `bun:"rel:belongs-to,join:user_id=id"`
 }
 
+// ====================
+//        Setup
+// ====================
+
 func initTokenTable(db *bun.DB) {
 	ctx := context.Background()
 	db.NewCreateTable().IfNotExists().Model((*Token)(nil)).Exec(ctx)
@@ -55,9 +59,11 @@ func (*Token) AfterCreateTable(ctx context.Context, query *bun.CreateTableQuery)
 
 func initAuthRoutes(app *fiber.App, db *bun.DB) {
 	routes := app.Group("/api/v1/auth")
+
 	routes.Get("/", func(c *fiber.Ctx) error {
 		return getCurrentUser(c, db)
 	})
+
 	routes.Delete("/", func(c *fiber.Ctx) error {
 		return logout(c, db)
 	})
@@ -65,13 +71,19 @@ func initAuthRoutes(app *fiber.App, db *bun.DB) {
 	routes = routes.Group("/", func(c *fiber.Ctx) error {
 		return requireAccount(c, db)
 	})
+
 	routes.Post("/", func(c *fiber.Ctx) error {
 		return register(c, db)
 	})
+
 	routes.Put("/", func(c *fiber.Ctx) error {
 		return login(c, db)
 	})
 }
+
+// ====================
+//    Route Handlers
+// ====================
 
 func getCurrentUser(c *fiber.Ctx, db *bun.DB) error {
 	tokenString := getTokenStringFromHeaders(c)
@@ -93,19 +105,22 @@ func register(c *fiber.Ctx, db *bun.DB) error {
 	user := new(User)
 	
 	if err := c.BodyParser(user); err != nil {
-		return err
+		fmt.Println(err)
+		return c.Status(400).JSON(fiber.Map{"message": "invalid input"})
 	}
 
 	accountKey, err := getAccountKeyFromHeaders(c)
 	if err != nil {
-		return err
+		fmt.Println(err)
+		return c.Status(401).JSON(fiber.Map{"message": "invalid account key"})
 	}
 
 	key := new(Key)
 	ctx := context.Background()
 	err = db.NewSelect().Model(key).Where("id = ?", accountKey).Scan(ctx)
 	if err != nil {
-		return err
+		fmt.Println(err)
+		return c.Status(401).JSON(fiber.Map{"message": "invalid account key"})
 	}
 
 	user.AccountId = key.AccountId
@@ -113,10 +128,16 @@ func register(c *fiber.Ctx, db *bun.DB) error {
 	_, err = user.New(db)
 
 	if err != nil {
-		return err
+		fmt.Println(err)
+		return c.Status(400).JSON(fiber.Map{"message": "invalid username or password"})
 	}
 
-	token := createJwt(user.ID, user.AccountId, db)
+	token, err := createJwt(user.ID, user.AccountId, db)
+	if err != nil {
+		fmt.Println(err)
+		// continue without a token
+		// return c.Status(400).JSON(fiber.Map{"message": "unable to create token"})
+	}
 	user.Token = token
 	
 	return c.JSON(user.ToPublicUser())
@@ -127,29 +148,38 @@ func login(c * fiber.Ctx, db *bun.DB) error {
 	user := new(User)
 	
 	if err := c.BodyParser(user); err != nil {
-		return err
+		fmt.Println(err)
+		return c.Status(400).JSON(fiber.Map{"message": "invalid input"})
 	}
 
 	accountKey, err := getAccountKeyFromHeaders(c)
 	if err != nil {
-		return err
+		fmt.Println(err)
+		return c.Status(401).JSON(fiber.Map{"message": "invalid account key"})
 	}
 
 	key := new(Key)
 	err = db.NewSelect().Model(key).Where("id = ?", accountKey).Scan(ctx)
 	if err != nil {
-		return err
+		fmt.Println(err)
+		return c.Status(401).JSON(fiber.Map{"message": "invalid account key"})
 	}
 
 	found := new(User)
-	db.NewSelect().Model(found).Where("username = ?", user.Username).Where("account_id = ?", key.AccountId).Scan(ctx)
+	db.NewSelect().Model(found).Where("username = ?", user.Username).
+		Where("account_id = ?", key.AccountId).Scan(ctx)
 
 	match := checkPasswordHash(user.Password, found.Password)
 	if !match || found.Password == "" {
-		return errors.New("invalid username or password")
+		return c.Status(400).JSON(fiber.Map{"message": "invalid username or password"})
 	}
 
-	token := createJwt(found.ID, found.AccountId, db)
+	token, err := createJwt(found.ID, found.AccountId, db)
+	if err != nil {
+		fmt.Println(err)
+		// continue without a token
+		// return c.Status(400).JSON(fiber.Map{"message": "unable to create token"})
+	}
 	found.Token = token
 
 	return c.JSON(found.ToPublicUser())
@@ -177,7 +207,34 @@ func logout(c *fiber.Ctx, db *bun.DB) error {
 	return c.JSON(fiber.Map{"success": true})
 }
 
-func createJwt(userId uuid.UUID, accountId uuid.UUID, db *bun.DB) string {
+// ====================
+//     Middleware
+// ====================
+
+func requireAdmin(c * fiber.Ctx, db *bun.DB) error {
+	tokenString := getTokenStringFromHeaders(c)
+	if tokenString == "" {
+		return c.Status(400).JSON(fiber.Map{ "message": "no token provided" })
+	}
+
+	user, err := getUserFromJwt(tokenString, db)
+	if err != nil {
+		fmt.Println(err)
+		return c.Status(401).JSON(fiber.Map{ "message": "unauthorized" })
+	}
+
+	if user.Role != "admin" {
+		return c.Status(401).JSON(fiber.Map{ "message": "unauthorized" })
+	}
+
+	return c.Next()
+}
+
+// ====================
+//      Utilities
+// ====================
+
+func createJwt(userId uuid.UUID, accountId uuid.UUID, db *bun.DB) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"uid": userId,
 		"aid": accountId,
@@ -190,7 +247,7 @@ func createJwt(userId uuid.UUID, accountId uuid.UUID, db *bun.DB) string {
 	// Sign and get the complete encoded token as a string using the secret
 	tokenString, err := token.SignedString(hmacSampleSecret)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
 	ctx := context.Background()
@@ -200,9 +257,9 @@ func createJwt(userId uuid.UUID, accountId uuid.UUID, db *bun.DB) string {
 	tokenRecord.ID = uuid.New()
 	tokenRecord.UserId = userId
 
-	db.NewInsert().Model(tokenRecord).Exec(ctx)
+	go db.NewInsert().Model(tokenRecord).Exec(ctx)
 
-	return tokenString
+	return tokenString, nil
 }
 
 func unsignToken(token string) string {
@@ -246,24 +303,6 @@ func getUserFromJwt(tokenString string, db *bun.DB) (*User, error) {
 	}
 
 	return nil, errors.New("invalid token")
-}
-
-func requireAdmin(c * fiber.Ctx, db *bun.DB) error {
-	tokenString := getTokenStringFromHeaders(c)
-	if tokenString == "" {
-		return errors.New("no token provided")
-	}
-
-	user, err := getUserFromJwt(tokenString, db)
-	if err != nil {
-		return err
-	}
-
-	if user.Role != "admin" {
-		return errors.New("unauthorized")
-	}
-
-	return c.Next()
 }
 
 func hashPassword(password string) (string, error) {

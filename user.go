@@ -41,6 +41,10 @@ type PublicUser struct {
 	UpdatedAt time.Time
 }
 
+// ====================
+//        Setup
+// ====================
+
 func initUserTable(db *bun.DB) {
 	ctx := context.Background()
 	db.NewCreateTable().IfNotExists().Model((*User)(nil)).Exec(ctx)
@@ -90,23 +94,31 @@ func initUserRoutes(app *fiber.App, db *bun.DB) {
 	routes.Get("/", func(c *fiber.Ctx) error {
 		return getUsers(c, db)
 	})
+
 	routes.Post("/", func(c *fiber.Ctx) error {
 		return createUser(c, db)
 	})
+
 	routes.Put("/:id", func(c *fiber.Ctx) error {
 		return updateUser(c, db)
 	})
+
 	routes.Delete("/:id", func(c *fiber.Ctx) error {
 		return deleteUser(c, db)
 	})
 }
+
+// ====================
+//    Route Handlers
+// ====================
 
 func getUsers(c *fiber.Ctx, db *bun.DB) error {
 	ctx := context.Background()
 	users := []User{}
 	err := db.NewSelect().Model(&users).Scan(ctx)
 	if err != nil {
-		return err
+		fmt.Println(err)
+		// Continue and simply return an empty array
 	}
 
 	publicUsers := []PublicUser{}
@@ -121,15 +133,86 @@ func createUser(c *fiber.Ctx, db *bun.DB) error {
 	user := new(User)
 	
 	if err := c.BodyParser(user); err != nil {
-		return err
+		fmt.Println(err)
+		return c.Status(400).JSON(fiber.Map{"message": "invalid input"})
 	}
 
 	if _, err := user.New(db); err != nil {
-		return err
+		fmt.Println(err)
+		return c.Status(400).JSON(fiber.Map{"message": "something went wrong"})
 	}
 
 	return c.JSON(user.ToPublicUser())
 }
+
+func updateUser(c *fiber.Ctx, db *bun.DB) error {
+	ctx := context.Background()
+	user := new(User)
+	
+	if err := c.BodyParser(user); err != nil {
+		fmt.Println(err)
+		return c.Status(400).JSON(fiber.Map{"message": "invalid input"})
+	}
+
+	if user.Password != "" {
+		user.Password, _ = hashPassword(user.Password)
+	}
+
+	id := c.Params("id")
+	_, err := db.NewUpdate().Model(user).Where("id = ?", id).Exec(ctx)
+	if err != nil {
+		fmt.Println(err)
+		return c.Status(400).JSON(fiber.Map{"message": "something went wrong"})
+	}
+
+	return c.JSON(user.ToPublicUser())
+}
+
+func updateUserMetadata(c *fiber.Ctx, db *bun.DB) error {
+	ctx := context.Background()
+	tokenString := getTokenStringFromHeaders(c)
+
+	if tokenString == "" {
+		return c.Status(401).JSON(fiber.Map{"message": "unauthorized"})
+	}
+
+	currentUser, err := getUserFromJwt(tokenString, db)
+	if err != nil {
+		fmt.Println(err)
+		return c.Status(401).JSON(fiber.Map{"message": "unauthorized"})
+	}
+
+	body := new(User)
+	if err := c.BodyParser(body); err != nil {
+		fmt.Println(err)
+		return c.Status(400).JSON(fiber.Map{"message": "invalid input"})
+	}
+
+	// ONLY update metadata here
+	currentUser.Metadata = body.Metadata
+
+	_, err = db.NewUpdate().Model(currentUser).Where("id = ?", currentUser.ID).Exec(ctx)
+	if err != nil {
+		fmt.Println(err)
+		return c.Status(400).JSON(fiber.Map{"message": "something went wrong"})
+	}
+
+	return c.JSON(currentUser.ToPublicUser())
+}
+
+func deleteUser(c *fiber.Ctx, db *bun.DB) error {
+	ctx := context.Background()
+
+	id := c.Params("id")
+	go db.NewDelete().Model(new(User)).Where("id = ?", id).Exec(ctx)
+
+	// Always return success so as not to enumerate
+	return c.JSON(fiber.Map{"success": true})
+}
+
+// ====================
+//      Utilities
+// ====================
 
 func (user *User) New(db *bun.DB) (sql.Result, error) {
 	ctx := context.Background()
@@ -162,69 +245,4 @@ func (user *User) ToPublicUser() *PublicUser {
 	publicUser.UpdatedAt = user.UpdatedAt
 
 	return publicUser
-}
-
-func updateUser(c *fiber.Ctx, db *bun.DB) error {
-	ctx := context.Background()
-	user := new(User)
-	
-	if err := c.BodyParser(user); err != nil {
-		return err
-	}
-
-	if user.Password != "" {
-		user.Password, _ = hashPassword(user.Password)
-	}
-
-	id := c.Params("id")
-	_, err := db.NewUpdate().Model(user).Where("id = ?", id).Exec(ctx)
-	if err != nil {
-		return err
-	}
-
-	return c.JSON(user.ToPublicUser())
-}
-
-func updateUserMetadata(c *fiber.Ctx, db *bun.DB) error {
-	ctx := context.Background()
-	tokenString := getTokenStringFromHeaders(c)
-
-	if tokenString == "" {
-		return errors.New("unauthorized")
-	}
-
-	currentUser, err := getUserFromJwt(tokenString, db)
-	if err != nil {
-		fmt.Println(err)
-		return errors.New("unauthorized")
-	}
-
-	body := new(User)
-	if err := c.BodyParser(body); err != nil {
-		return err
-	}
-
-	// ONLY update metadata here
-	currentUser.Metadata = body.Metadata
-
-	_, err = db.NewUpdate().Model(currentUser).Where("id = ?", currentUser.ID).Exec(ctx)
-	if err != nil {
-		fmt.Println(err)
-		return errors.New("something went wrong")
-	}
-
-	return c.JSON(currentUser.ToPublicUser())
-}
-
-func deleteUser(c *fiber.Ctx, db *bun.DB) error {
-	ctx := context.Background()
-
-	id := c.Params("id")
-	_, err := db.NewDelete().Model(new(User)).Where("id = ?", id).Exec(ctx)
-
-	if err != nil {
-		return err
-	}
-
-	return c.JSON(fiber.Map{"success": true})
 }

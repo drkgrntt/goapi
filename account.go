@@ -35,6 +35,10 @@ type Key struct {
 	Account *Account `bun:"rel:belongs-to,join:account_id=id"`
 }
 
+// ====================
+//        Setup
+// ====================
+
 func initAccountTables(db *bun.DB) {
 	ctx := context.Background()
 	db.NewCreateTable().IfNotExists().Model((*Account)(nil)).Exec(ctx)
@@ -48,6 +52,7 @@ func (a *Account) BeforeAppendModel(ctx context.Context, query bun.Query) error 
 	}
 	return nil
 }
+
 func (a *Key) BeforeAppendModel(ctx context.Context, query bun.Query) error {
 	switch query.(type) {
 		case *bun.UpdateQuery:
@@ -55,6 +60,14 @@ func (a *Key) BeforeAppendModel(ctx context.Context, query bun.Query) error {
 	}
 	return nil
 }
+
+// ====================
+//    Route Handlers
+// ====================
+
+// ====================
+//     Middleware
+// ====================
 
 func requireAccount(c *fiber.Ctx, db *bun.DB) error {
 	accountKey, err := getAccountKeyFromHeaders(c)
@@ -74,6 +87,10 @@ func requireAccount(c *fiber.Ctx, db *bun.DB) error {
 
 	return c.Next()
 }
+
+// ====================
+//      Utilities
+// ====================
 
 func getAccountKeyFromHeaders(c *fiber.Ctx) (uuid.UUID, error) {
 	headers := c.GetReqHeaders()
