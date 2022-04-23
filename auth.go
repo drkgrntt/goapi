@@ -262,7 +262,7 @@ func requireAdmin(c * fiber.Ctx, db *bun.DB) error {
 		return c.Status(401).JSON(fiber.Map{ "message": "unauthorized" })
 	}
 
-	if user.Role != "admin" {
+	if !stringInSlice(user.Role, adminRoles()) {
 		return c.Status(401).JSON(fiber.Map{ "message": "unauthorized" })
 	}
 

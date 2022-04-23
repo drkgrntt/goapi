@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
+	"github.com/uptrace/bun"
 )
 
 func main() {
@@ -17,11 +18,14 @@ func main() {
 	
 	app := fiber.New()
 	db := initDb()
-
-	initUserRoutes(app, db)
-	initAuthRoutes(app, db)
+	initRoutes(app, db)
 
 	port := os.Getenv("PORT")
-	
 	log.Fatalln(app.Listen(fmt.Sprintf(":%v", port)))
+}
+
+func initRoutes(app *fiber.App, db *bun.DB) {
+	initAccountRoutes(app, db)
+	initUserRoutes(app, db)
+	initAuthRoutes(app, db)
 }
